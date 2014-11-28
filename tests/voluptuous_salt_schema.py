@@ -6,6 +6,11 @@ import salt.config
 import salt.loader
 import salt.utils
 
+try:
+    from salt.utils.validate import voluptuous as V
+except ImportError:
+    import voluptuous as V
+
 def main():
     '''
     Validate a highstate data structure with a Voluptuous schema
@@ -26,8 +31,16 @@ def main():
     statemods = salt.loader.states(__opts__, {})
     argspecs = salt.utils.argspec_report(statemods)
 
+    # define v schema
+    schema = {}
+    for k,v in argspecs.iteritems():
+      s = {}
+      for arg in v['args']:
+        s[arg] = str
+      schema[k] = V.Schema(s)
+
     import pprint
-    pprint.pprint(argspecs)
+    pprint.pprint(schema['webutil.user_exists'].schema)
 
 if __name__ == '__main__':
     main()
