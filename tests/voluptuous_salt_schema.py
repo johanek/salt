@@ -5,6 +5,7 @@ import os
 import salt.config
 import salt.loader
 import salt.utils
+from IPython.core.debugger import Tracer
 
 try:
     from salt.utils.validate import voluptuous as V
@@ -31,13 +32,35 @@ def main():
     statemods = salt.loader.states(__opts__, {})
     argspecs = salt.utils.argspec_report(statemods)
 
+    specialargs = {
+        'name': str,
+        'names': list,
+        'check_cmd': str,
+        'listen': str,
+        'listen_in': str,
+        'onchanges': str,
+        'onchanges_in': str,
+        'onfail': str,
+        'onfail_in': str,
+        'onlyif': str,
+        'prereq': str,
+        'prereq_in': str,
+        'require': str,
+        'require_in': str,
+        'unless': str,
+        'use': str,
+        'use_in': str,
+        'watch': str,
+        'watch_in': str
+    }
+
     # define v schema
     schema = {}
     for k,v in argspecs.iteritems():
-      s = {}
-      for arg in v['args']:
-        s[arg] = str
-      schema[k] = V.Schema(s)
+        s = specialargs.copy()
+        for arg in v['args']:
+            s[arg] = [ str, int ]
+        schema[k] = V.Schema(s)
 
     import pprint
     pprint.pprint(schema['webutil.user_exists'].schema)
