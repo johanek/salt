@@ -8,6 +8,7 @@ import re
 import salt.config
 import salt.loader
 import salt.utils
+from types import *
 
 try:
   from IPython.core.debugger import Tracer
@@ -35,14 +36,16 @@ def main(file):
     '''
     __opts__ = salt.config.minion_config(
             os.environ.get('SALT_MINION_CONFIG', '/etc/salt/minion'))
+    __salt__ = salt.loader.minion_mods(__opts__)
+    __opts__['grains'] = salt.loader.grains(__opts__)
 
     # Statemods doesn't seen to return all the state modules????
     # https://gist.github.com/johanek/459fa02df48511566a26
-    statemods = salt.loader.states(__opts__, {})
+    statemods = salt.loader.states(__opts__, __salt__)
     argspecs = salt.utils.argspec_report(statemods)
 
     specialargs = {
-        'name': str,
+        'name': V.Coerce(str),
         'names': list,
         'check_cmd': str,
         'listen': list,
@@ -51,66 +54,76 @@ def main(file):
         'onchanges_in': list,
         'onfail': list,
         'onfail_in': list,
-        'onlyif': str,
+        'onlyif': V.Coerce(str),
         'prereq': list,
         'prereq_in': list,
         'require': list,
         'require_in': list,
-        'unless': str,
+        'unless': V.Coerce(str),
         'use': list,
         'use_in': list,
         'watch': list,
-        'watch_in': list
+        'watch_in': list,
+        'formatter': str
     }
 
-    # define v schema
-    # this doesn't seem to include everything - pkg.installed???
+    # define voluptuous schema
     schema = {}
-    for k,v in argspecs.iteritems():
+    for state,specs in argspecs.iteritems():
         s = specialargs.copy()
-        for arg in v['args']:
-            s[arg] = str
-        schema[k] = V.Schema(s)
+        for idx, arg in enumerate(specs['args']):
+            try:
+                default = specs['defaults'][idx]
+            except:
+                default = 'nodefault'
+            if type(default) == bool:
+                stype = bool
+            elif type(default) == NoneType:
+                stype = V.Coerce(str)
+            else:
+                stype = V.Coerce(type(default))
+            s[arg] = stype
+        schema[state] = V.Schema(s)
 
-    # Render state
-    renderers = salt.loader.render(__opts__, {})
+    # Render state file
+    renderers = salt.loader.render(__opts__, __salt__)
     try:
         content = renderers['jinja'](file).read()
         data = renderers['yaml'](content)
     except salt.exceptions.SaltRenderError as error:
         output("%s: %s" % (file, error))
+        return
 
     # iterate over states
-    # TODO: make sure variable names match what salt calls them
-    #       add include, exclude to schema
+    # TODO: add include, exclude to schema
+    #       handle context, defaults better
     prog = re.compile(r'.*\.')
-    for id, v in data.items():
+    for id, resource in data.items():
         if id in ['include', 'exclude']:
             break
 
         # iterate over states
-        for state, options in v.items():
-            # find function name, i.e. cmd.run
-            match = prog.match(state)
+        for module, args in resource.items():
+            # find state name, i.e. cmd.run
+            match = prog.match(module)
             if match:
-                resource = state
+                state = module
             else:
-                resource = "%s.%s" % (state, options.pop(0))
+                state = "%s.%s" % (module, args.pop(0))
 
             # check function exists in scema
-            # TODO: don't nest ifs here - break out of loop if this fails
-            if resource in schema:
+            if state not in schema:
+                output("%s: %s not part of schema" % (file, state))
+                break
 
-                # iterate over arguments to make sure they're valid according to our schema
-                for opt in options:
-                    try:
-                        schema[resource](opt)
-                    except Exception as e:
-                        output("%s: %s %s: Got %s for %s but %s" % (file, id, resource, opt.itervalues().next(), opt.iterkeys().next(), e.msg))
-            else:
-                print "%s: %s not part of schema" % (file, resource)
-
-#    pprint.pprint(schema['webutil.user_exists'].schema)
+            # iterate over arguments to make sure they're valid according to our schema
+            for arg in args:
+                if arg.iterkeys().next() in [ 'context', 'defaults' ]:
+                    break
+                try:
+                    schema[state](arg)
+                except Exception as e:
+                    output("%s: %s %s: Got %s for %s but %s" % (file, id, state, arg.itervalues().next(), arg.iterkeys().next(), e.msg))
 
 def output(message):
   pprint.pprint(message)
@@ -118,13 +131,3 @@ def output(message):
 if __name__ == '__main__':
     for file in sys.argv[1:]:
         main(file)
-
-# 'user.present': {
-#         'args': [ 'name', 'uid', 'gid', 'gid_from_name', 'groups',
-#             'optional_groups', 'remove_groups', 'home', 'createhome',
-#             'password', 'enforce_password', 'shell', 'unique', 'system',
-#             'fullname', 'roomnumber', 'workphone', 'homephone'],
-#         'defaults': ( None, None, False, None, None, True, None, True, None,
-#             True, None, True, False, None, None, None, None),
-#         'kwargs': None,
-#         'varargs': None},
