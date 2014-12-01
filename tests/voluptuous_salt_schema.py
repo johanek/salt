@@ -8,7 +8,11 @@ import re
 import salt.config
 import salt.loader
 import salt.utils
-from IPython.core.debugger import Tracer
+
+try:
+  from IPython.core.debugger import Tracer
+except:
+  print "no ipython"
 
 try:
     from salt.utils.validate import voluptuous as V
@@ -32,6 +36,8 @@ def main(file):
     __opts__ = salt.config.minion_config(
             os.environ.get('SALT_MINION_CONFIG', '/etc/salt/minion'))
 
+    # Statemods doesn't seen to return all the state modules????
+    # https://gist.github.com/johanek/459fa02df48511566a26
     statemods = salt.loader.states(__opts__, {})
     argspecs = salt.utils.argspec_report(statemods)
 
@@ -100,7 +106,7 @@ def main(file):
                     try:
                         schema[resource](opt)
                     except Exception as e:
-                        output("%f: %s %s: Got %s for %s but %s" % (file, id, resource, opt.itervalues().next(), opt.iterkeys().next(), e.msg))
+                        output("%s: %s %s: Got %s for %s but %s" % (file, id, resource, opt.itervalues().next(), opt.iterkeys().next(), e.msg))
             else:
                 print "%s: %s not part of schema" % (file, resource)
 
