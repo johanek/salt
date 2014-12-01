@@ -1,7 +1,10 @@
+import sys
 import os
 
 # import voluptuous
 
+import pprint
+import re
 import salt.config
 import salt.loader
 import salt.utils
@@ -12,7 +15,7 @@ try:
 except ImportError:
     import voluptuous as V
 
-def main():
+def main(file):
     '''
     Validate a highstate data structure with a Voluptuous schema
 
@@ -36,37 +39,79 @@ def main():
         'name': str,
         'names': list,
         'check_cmd': str,
-        'listen': str,
-        'listen_in': str,
-        'onchanges': str,
-        'onchanges_in': str,
-        'onfail': str,
-        'onfail_in': str,
+        'listen': list,
+        'listen_in': list,
+        'onchanges': list,
+        'onchanges_in': list,
+        'onfail': list,
+        'onfail_in': list,
         'onlyif': str,
-        'prereq': str,
-        'prereq_in': str,
-        'require': str,
-        'require_in': str,
+        'prereq': list,
+        'prereq_in': list,
+        'require': list,
+        'require_in': list,
         'unless': str,
-        'use': str,
-        'use_in': str,
-        'watch': str,
-        'watch_in': str
+        'use': list,
+        'use_in': list,
+        'watch': list,
+        'watch_in': list
     }
 
     # define v schema
+    # this doesn't seem to include everything - pkg.installed???
     schema = {}
     for k,v in argspecs.iteritems():
         s = specialargs.copy()
         for arg in v['args']:
-            s[arg] = [ str, int ]
+            s[arg] = str
         schema[k] = V.Schema(s)
 
-    import pprint
-    pprint.pprint(schema['webutil.user_exists'].schema)
+    # Render state
+    renderers = salt.loader.render(__opts__, {})
+    try:
+        content = renderers['jinja'](file).read()
+        data = renderers['yaml'](content)
+    except salt.exceptions.SaltRenderError as error:
+        output("%s: %s" % (file, error))
+
+    # iterate over states
+    # TODO: make sure variable names match what salt calls them
+    #       add include, exclude to schema
+    prog = re.compile(r'.*\.')
+    for id, v in data.items():
+        if id in ['include', 'exclude']:
+            break
+
+        # iterate over states
+        for state, options in v.items():
+            # find function name, i.e. cmd.run
+            match = prog.match(state)
+            if match:
+                resource = state
+            else:
+                resource = "%s.%s" % (state, options.pop(0))
+
+            # check function exists in scema
+            # TODO: don't nest ifs here - break out of loop if this fails
+            if resource in schema:
+
+                # iterate over arguments to make sure they're valid according to our schema
+                for opt in options:
+                    try:
+                        schema[resource](opt)
+                    except Exception as e:
+                        output("%f: %s %s: Got %s for %s but %s" % (file, id, resource, opt.itervalues().next(), opt.iterkeys().next(), e.msg))
+            else:
+                print "%s: %s not part of schema" % (file, resource)
+
+#    pprint.pprint(schema['webutil.user_exists'].schema)
+
+def output(message):
+  pprint.pprint(message)
 
 if __name__ == '__main__':
-    main()
+    for file in sys.argv[1:]:
+        main(file)
 
 # 'user.present': {
 #         'args': [ 'name', 'uid', 'gid', 'gid_from_name', 'groups',
