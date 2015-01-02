@@ -87,8 +87,15 @@ def _getschema(state):
         'refresh_db': bool
     }
 
+    service_schema = {
+        'reload': bool
+    }
+
     if state in ['pkgrepo.managed', 'pkgrepo.absent']:
         return Schema(dict(schema.items() + pkgrepo_schema.items()))
+
+    if state in ['service.running']:
+        schema = dict(schema.items() + service_schema.items())
 
     # Identify arguments and default value. Add to schema dict inheriting
     # type from default value. If no default value, assume string.
