@@ -9,8 +9,6 @@ import logging
 from types import NoneType
 from collections import OrderedDict
 from voluptuous import *
-from inspect import getargspec
-import importlib
 
 # Import salt libs
 import salt.config
@@ -25,23 +23,24 @@ __outputter__ = {
 
 log = logging.getLogger(__name__)
 
-def _getschema(state):
+def _getschema():
 
-    # Get argspec for state. Return False is not available.
-    (module, function) = state.split('.')
-    try:
-        package = importlib.import_module("salt.states.%s" % module)
-    except:
-        return False
+    schema = {}
 
-    try:
-        argspec = getargspec(getattr(package, function))
-    except Exception as e:
-        return False
+    # Setup dunder dicts
+    __opts__ = salt.config.minion_config(os.environ.get('SALT_MINION_CONFIG', '/etc/salt/minion'))
+    __grains__ = salt.loader.grains(__opts__)
+    __opts__['grains'] = __grains__
+    __opts__['pillar'] = __pillar__
+    __salt__ = salt.loader.minion_mods(__opts__)
+
+    # Get list of state modules and their arguments
+    statemods = salt.loader.states(__opts__, __salt__)
+    argspecs = salt.utils.argspec_report(statemods)
 
     # Default schema for common functions
     # Add list of valid templates
-    schema = {
+    default_schema = {
         'context': OrderedDict,
         'defaults': OrderedDict,
         'name': Coerce(str),
@@ -67,7 +66,7 @@ def _getschema(state):
         'formatter': str
     }
 
-    # pkgrepo doesn't have arguments defined in the state. define them here
+    # pkgrepo doesn't appear in list of state modules. Add it here.
     pkgrepo_schema = {
         'baseurl': str,
         'comments': list,
@@ -80,50 +79,52 @@ def _getschema(state):
         'gpgkey': str,
         'humanname': str,
         'keyserver': str,
-        'key_urk': str,
+        'key_url': str,
         'mirrorlist': str,
+        'name': str,
+        'order': int,
         'ppa': str,
         'ppa_auth': str,
         'refresh_db': bool
     }
-
-    service_schema = {
-        'reload': bool
-    }
-
-    if state in ['pkgrepo.managed', 'pkgrepo.absent']:
-        return Schema(dict(schema.items() + pkgrepo_schema.items()))
-
-    if state in ['service.running']:
-        schema = dict(schema.items() + service_schema.items())
+    for state in ['pkgrepo.managed', 'pkgrepo.absent']:
+        schema[state] = Schema(dict(default_schema.items() + pkgrepo_schema.items()))
 
     # Identify arguments and default value. Add to schema dict inheriting
     # type from default value. If no default value, assume string.
-    for idx, arg in enumerate(argspec.args):
-        if arg not in schema:
-            if argspec.defaults == None:
-                default = 'string'
-            else:
-                nodefaults = (len(argspec.args) - len(argspec.defaults))
-                if idx < nodefaults:
+    for state,specs in argspecs.iteritems():
+        s = default_schema.copy()
+        for idx, arg in enumerate(specs['args']):
+            if arg not in s:
+                if specs['defaults'] == None:
                     default = 'string'
                 else:
-                    didx = (idx - nodefaults)
-                    default = argspec.defaults[didx]
+                    nodefaults = (len(specs['args']) - len(specs['defaults']))
+                    if idx < nodefaults:
+                        default = 'string'
+                    else:
+                        didx = (idx - nodefaults)
+                        default = specs['defaults'][didx]
 
-            if type(default) == bool:
-                stype = bool
-            elif type(default) == NoneType:
-                stype = Coerce(str)
-            else:
-                stype = Coerce(type(default))
-            schema[arg] = stype
+                if type(default) == bool:
+                    stype = bool
+                elif type(default) == NoneType:
+                    stype = Coerce(str)
+                else:
+                    stype = Coerce(type(default))
+                s[arg] = stype
 
-    return Schema(schema)
+        # Add reload option to service.running
+        if state in ['service.running']:
+            s['reload'] =  bool
+
+        schema[state] = Schema(s)
+
+    return schema
 
 def validate_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwargs):
 
-    schema = {}
+    schema = _getschema()
     ret = {}
     errors = []
     data = __salt__['state.show_sls'](mods, saltenv, test, queue, env, kwargs=kwargs)
@@ -134,6 +135,12 @@ def validate_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwarg
 
     # iterate over ids
     for id, resource in data.items():
+
+        # TODO: include and exclude are lists of states and/or ids, without arguments
+        #       we could validate them with their own schema
+        if id in ['__include__', '__exclude__']:
+             break
+
         ret[id] = {}
 
         # iterate over states
@@ -147,12 +154,10 @@ def validate_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwarg
             function = [e for e in args if type(e) == str][0]
             state = "%s.%s" % (module, function)
 
-            # add state to schema, and check state is valid
+            # check state is valid
             if state not in schema:
-                schema[state] =  _getschema(state)
-                if schema[state] == False:
-                    errors.append("%s: %s not available in schema" % (id, state))
-                    continue
+                errors.append("%s: %s not available in schema" % (id, state))
+                continue
 
             # iterate over arguments to make sure they're valid according to our schema
             for arg in [e for e in args if type(e) != str]:
